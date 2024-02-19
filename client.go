@@ -10,7 +10,7 @@ import (
 )
 
 func main() {
-	proxyAddr := "127.0.0.1:7070"
+	proxyAddr := "127.0.0.1:3000"
 	targetAddr := "127.0.0.1:8080"
 
 	conn, err := dialSocksProxy(proxyAddr, targetAddr)
@@ -22,10 +22,10 @@ func main() {
 
 	// 使用 conn 进行通信...
 	// 构建 HTTP 请求
-	request := "POST / HTTP/1.1\n" +
-		"Host: LxsTest\n" +
-		"User-Agent: LXS Custom Client\n" +
-		"Connection: close\n\n"
+	request := "GET / HTTP/1.1\r\n" +
+		"Host: LxsTest\r\n" +
+		"User-Agent: LXS Custom Client\r\n" +
+		"Connection: close\r\n\r\n"
 	// 发送请求
 	_, err = conn.Write([]byte(request))
 	if err != nil {
@@ -65,7 +65,7 @@ func main() {
 		responseBody += string(buffer[:n])
 	}
 
-	fmt.Println("Response Body:", responseBody)
+	fmt.Println(responseBody)
 }
 
 func dialSocksProxy(proxyAddr, targetAddr string) (net.Conn, error) {
