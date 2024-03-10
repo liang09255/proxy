@@ -1,117 +1,91 @@
 package main
 
 import (
-	"errors"
-	"fmt"
+	"golang.org/x/net/proxy"
+	"golang.zx2c4.com/wireguard/tun"
+	"golang.zx2c4.com/wireguard/windows/tunnel/winipcfg"
 	"io"
+	"log"
 	"net"
-	"strconv"
-	"strings"
+	"net/netip"
+	"time"
 )
 
+const DefaultMTU = 1420
+
 func main() {
-	proxyAddr := "127.0.0.1:3000"
-	targetAddr := "127.0.0.1:8080"
-
-	conn, err := dialSocksProxy(proxyAddr, targetAddr)
+	device := initTun("TestTun", "10.0.0.1/24")
+	defer device.Close()
+	// 拿到socks5 dialer
+	dialer := getSocks5TCPDialer("127.0.0.1:3000")
+	// 监听端口接受连接请求
+	listener, err := net.Listen("tcp", "10.0.0.1:1000")
 	if err != nil {
-		fmt.Println("Error connecting via SOCKS5 proxy:", err)
-		return
+		panic(err)
 	}
-	defer conn.Close()
+	defer listener.Close()
+	l := listener.(*net.TCPListener)
 
-	// 使用 conn 进行通信...
-	// 构建 HTTP 请求
-	request := "GET / HTTP/1.1\r\n" +
-		"Host: LxsTest\r\n" +
-		"User-Agent: LXS Custom Client\r\n" +
-		"Connection: close\r\n\r\n"
-	// 发送请求
-	_, err = conn.Write([]byte(request))
-	if err != nil {
-		fmt.Println("Error sending HTTP GET request:", err)
-		return
-	}
-
-	// 读取响应头部
-	var responseHeader string
-	buffer := make([]byte, 1024)
+	log.Println("Listening on", listener.Addr())
+	//持续接收连接请求
 	for {
-		n, err := conn.Read(buffer)
+		conn, err := l.AcceptTCP()
 		if err != nil {
-			fmt.Println("Error reading HTTP response:", err)
-			return
+			log.Println("Error accepting connection:", err)
+			continue
 		}
-		responseHeader += string(buffer[:n])
-		if strings.Contains(responseHeader, "\r\n\r\n") {
-			break
-		}
+		log.Println("获得一个新连接")
+		go handleTCPConnect(conn, dialer)
 	}
-
-	// 获取主体起始位置
-	bodyStart := strings.Index(responseHeader, "\r\n\r\n") + 4
-
-	// 读取主体内容
-	var responseBody string
-	responseBody += responseHeader[bodyStart:]
-	for {
-		n, err := conn.Read(buffer)
-		if err != nil {
-			if err != io.EOF {
-				fmt.Println("Error reading HTTP response body:", err)
-			}
-			break
-		}
-		responseBody += string(buffer[:n])
-	}
-
-	fmt.Println(responseBody)
 }
 
-func dialSocksProxy(proxyAddr, targetAddr string) (net.Conn, error) {
-	proxyConn, err := net.Dial("tcp", proxyAddr)
+func handleTCPConnect(clientConn *net.TCPConn, dialer proxy.Dialer) {
+	defer clientConn.Close()
+	// 获取到目标ip及端口
+	log.Println(clientConn.RemoteAddr().String(), clientConn.LocalAddr().String())
+	// 建立tcp连接
+	serverConn, err := dialer.Dial("tcp", "10.0.0.1:8889")
 	if err != nil {
-		return nil, err
+		log.Println("Error connecting to server:", err)
+		return
 	}
+	defer serverConn.Close()
+	// copy
+	go io.Copy(serverConn, clientConn)
+	io.Copy(clientConn, serverConn)
+}
 
-	// 发送 SOCKS5 协商请求
-	_, err = proxyConn.Write([]byte{0x05, 0x01, 0x00})
+// 初始化tun
+func initTun(name, ipStr string) tun.Device {
+	// 创建tun
+	device, err := tun.CreateTUN(name, DefaultMTU)
 	if err != nil {
-		return nil, err
+		panic(err)
 	}
-
-	// 读取 SOCKS5 协商响应
-	response := make([]byte, 2)
-	_, err = proxyConn.Read(response)
+	// 绑定ip
+	nativeTunDevice := device.(*tun.NativeTun)
+	link := winipcfg.LUID(nativeTunDevice.LUID())
+	ip, err := netip.ParsePrefix(ipStr)
 	if err != nil {
-		return nil, err
+		panic(err)
 	}
-	if response[0] != 0x05 || response[1] != 0x00 {
-		return nil, errors.New("SOCKS5 negotiation failed")
-	}
-
-	// 发送连接请求
-	targetHost, targetPort, _ := net.SplitHostPort(targetAddr)
-	targetPortInt, _ := strconv.Atoi(targetPort)
-	targetPortBytes := []byte{byte(targetPortInt >> 8), byte(targetPortInt & 0xFF)}
-
-	req := []byte{0x05, 0x01, 0x00, 0x03, byte(len(targetHost))}
-	req = append(req, []byte(targetHost)...)
-	req = append(req, targetPortBytes...)
-	_, err = proxyConn.Write(req)
+	err = link.SetIPAddresses([]netip.Prefix{ip})
 	if err != nil {
-		return nil, err
+		panic(err)
 	}
+	return device
+}
 
-	// 读取连接响应
-	response = make([]byte, 10)
-	_, err = proxyConn.Read(response)
+// 获取socks5 dialer
+func getSocks5TCPDialer(addr string) proxy.Dialer {
+	dialer, err := proxy.SOCKS5("tcp", addr, nil,
+		&net.Dialer{
+			Timeout:   3 * time.Second,
+			KeepAlive: 30 * time.Second,
+		},
+	)
 	if err != nil {
-		return nil, err
+		panic(err)
 	}
-	if response[1] != 0x00 {
-		return nil, errors.New("SOCKS5 connection failed")
-	}
-
-	return proxyConn, nil
+	return dialer
 }
