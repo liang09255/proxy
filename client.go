@@ -19,7 +19,7 @@ func main() {
 	// 拿到socks5 dialer
 	dialer := getSocks5TCPDialer("127.0.0.1:3000")
 	// 监听端口接受连接请求
-	listener, err := net.Listen("tcp", "10.0.0.1:1000")
+	listener, err := net.Listen("tcp", "10.0.0.1:8080")
 	if err != nil {
 		panic(err)
 	}
@@ -56,7 +56,7 @@ func handleTCPConnect(clientConn *net.TCPConn, dialer proxy.Dialer) {
 }
 
 // 初始化tun
-func initTun(name, ipStr string) tun.Device {
+func initTun(name, ipStr string) *tun.NativeTun {
 	// 创建tun
 	device, err := tun.CreateTUN(name, DefaultMTU)
 	if err != nil {
@@ -73,7 +73,7 @@ func initTun(name, ipStr string) tun.Device {
 	if err != nil {
 		panic(err)
 	}
-	return device
+	return nativeTunDevice
 }
 
 // 获取socks5 dialer
