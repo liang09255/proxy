@@ -5,7 +5,7 @@ go 1.19
 require (
 	github.com/gin-gonic/gin v1.9.1
 	golang.org/x/net v0.21.0
-	golang.zx2c4.com/wireguard v0.0.0-20231211153847-12269c276173
+	golang.zx2c4.com/wireguard v0.0.0-20220316235147-5aff28b14c24
 	golang.zx2c4.com/wireguard/windows v0.5.3
 )
 
