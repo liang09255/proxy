@@ -1,17 +1,15 @@
 package main
 
 import (
-	"encoding/binary"
+	"github.com/google/gopacket"
+	"github.com/google/gopacket/layers"
 	"golang.org/x/net/ipv4"
 	"golang.org/x/net/ipv6"
 	"golang.org/x/net/proxy"
 	"golang.zx2c4.com/wireguard/tun"
 	"golang.zx2c4.com/wireguard/windows/tunnel/winipcfg"
 	"log"
-	"net"
 	"net/netip"
-	"strconv"
-	"time"
 )
 
 const DefaultMTU2 = 1420
@@ -22,29 +20,24 @@ const (
 )
 
 func main() {
-	tun2 := initTun2("Test Tun", "20.0.0.1/24")
+	tun2 := initTun2("Test Tun", "10.0.0.1/24")
 	for {
 		// 第一个字节获取到协议版本号和头部长度
-		buf := make([]byte, 1024)
-		_, err := tun2.Read(buf, 0)
+		buf := make([]byte, 2048)
+		n, err := tun2.Read(buf, 0)
+		buf = buf[:n]
 		if err != nil {
 			panic(err)
 		}
 		switch buf[0] >> 4 {
 		case ipv4.Version:
-			//headerLength := (buf[0] & 0x0F) * 4
-			//buf = make([]byte, headerLength)
-			//_, err = tun2.Read(buf, 0)
-			//if err != nil {
-			//	log.Println(err)
-			//	continue
-			//}
+
 			header, err := ipv4.ParseHeader(buf)
 			if err != nil {
 				log.Println(err)
 				continue
 			}
-			if header.Dst.String() != "39.99.236.131" {
+			if header.Dst.String() != "39.108.81.214" {
 				continue
 			}
 			log.Println("接收到一个ipv4数据包", "源地址:", header.Src, "目的地址:", header.Dst)
@@ -56,16 +49,91 @@ func main() {
 			case ProtocolICMP:
 				log.Println("暂不支持ICMP协议")
 			case ProtocolTCP:
-				sourcePort := binary.BigEndian.Uint16(data[0:2])
-				dstPort := binary.BigEndian.Uint16(data[2:4])
-				log.Println("源端口:", sourcePort, "目的端口:", dstPort)
-				dialer := getSocks5TCPDialer2()
-				conn, err := dialer.Dial("tcp", header.Dst.String()+":"+strconv.FormatInt(int64(dstPort), 10))
-				if err != nil {
-					log.Println(err)
-					continue
+				tcpP := gopacket.NewPacket(data, layers.LayerTypeTCP, gopacket.Default)
+				tl := tcpP.TransportLayer()
+				tcp, _ := tl.(*layers.TCP)
+				if tcp.SYN && tcp.Seq != 0 {
+					log.Println("第一次握手", tcp.Seq)
+					log.Println("第二次握手")
+
+					ip := &layers.IPv4{
+						Version:  4,
+						TTL:      255,
+						Flags:    layers.IPv4DontFragment,
+						Protocol: layers.IPProtocolTCP,
+						SrcIP:    header.Dst,
+						DstIP:    header.Src,
+					}
+
+					tcp2 := &layers.TCP{
+						SrcPort: tcp.DstPort,
+						DstPort: tcp.SrcPort,
+						SYN:     true,
+						ACK:     true,
+						Ack:     tcp.Seq + 1,
+						Seq:     123,
+						Window:  65535,
+					}
+					options := gopacket.SerializeOptions{}
+					buffer := gopacket.NewSerializeBuffer()
+					err := gopacket.SerializeLayers(buffer, options, ip, tcp2)
+					if err != nil {
+						log.Println("Error serializing packet:", err)
+						continue
+					}
+					n2, err := tun2.Write(buffer.Bytes(), 0)
+					log.Println(buffer.Bytes())
+					if err != nil {
+						log.Println(err)
+						continue
+					}
+					log.Println(n2)
+				} else if tcp.ACK && tcp.Ack != 0 && tcp.Seq != 0 {
+					log.Println("第三次握手", tcp.ACK, tcp.Seq)
+				} else {
+					log.Println("开始发送数据")
 				}
-				// TODO 转发数据
+				//if tcp.SYN && !tcp.ACK {
+				//	log.Println("完成连接")
+				//	sourcePort := tl.TransportFlow().Src()
+				//	dstPort := tl.TransportFlow().Dst()
+				//	log.Println("源端口:", sourcePort, "目的端口:", dstPort)
+				//	dialer := getSocks5TCPDialer2()
+				//	_, err := dialer.Dial("tcp", header.Dst.String()+":"+dstPort.String())
+				//	if err != nil {
+				//		log.Println(err)
+				//		continue
+				//	}
+				//	al := tcpP.ApplicationLayer()
+				//	if al != nil {
+				//		log.Println(al.Payload())
+				//		log.Println(al.LayerPayload())
+				//		log.Println(al.LayerContents())
+				//	}
+				//}
+
+				//// TODO 转发数据
+				//_, err = conn.Write(data)
+				//if err != nil {
+				//	log.Println(err)
+				//	continue
+				//}
+				////log.Println(string(data))
+				//result := make([]byte, 1024)
+				//n2, err := conn.Read(result)
+				//if err != nil {
+				//	log.Println(err)
+				//	continue
+				//}
+				//result = result[:n2]
+				//log.Println(string(result))
+				//n3, err := tun2.Write(result, 0)
+				//if err != nil {
+				//	log.Println(err)
+				//	continue
+				//}
+				//log.Println(n3)
+				//log.Println(string(result))
 
 			case ProtocolUDP:
 			default:
@@ -96,13 +164,8 @@ func initTun2(name, ipStr string) tun.Device {
 }
 
 func getSocks5TCPDialer2() proxy.Dialer {
-	addr := "127.0.0.1:3000"
-	dialer, err := proxy.SOCKS5("tcp", addr, nil,
-		&net.Dialer{
-			Timeout:   3 * time.Second,
-			KeepAlive: 30 * time.Second,
-		},
-	)
+	addr := "39.99.236.131:3000"
+	dialer, err := proxy.SOCKS5("tcp", addr, nil, nil)
 	if err != nil {
 		panic(err)
 	}
