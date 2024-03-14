@@ -20,7 +20,7 @@ const (
 )
 
 func main() {
-	tun2 := initTun2("Test Tun", "10.0.0.1/24")
+	tun2 := initTun2("Test Tun", "20.0.0.1/24")
 	for {
 		// 第一个字节获取到协议版本号和头部长度
 		buf := make([]byte, 2048)
@@ -31,38 +31,36 @@ func main() {
 		}
 		switch buf[0] >> 4 {
 		case ipv4.Version:
+			ipP := gopacket.NewPacket(buf, layers.LayerTypeIPv4, gopacket.Default)
+			ipL := ipP.NetworkLayer()
+			ip, _ := ipL.(*layers.IPv4)
+			if ip.DstIP.String() != "39.108.81.214" {
+				continue
+			}
+			log.Println("接收到一个ipv4数据包", "源地址:", ip.SrcIP, "目的地址:", ip.DstIP)
+			if ip.Length == 0 {
+				continue
+			}
 
-			header, err := ipv4.ParseHeader(buf)
-			if err != nil {
-				log.Println(err)
-				continue
-			}
-			if header.Dst.String() != "39.108.81.214" {
-				continue
-			}
-			log.Println("接收到一个ipv4数据包", "源地址:", header.Src, "目的地址:", header.Dst)
-			if header.TotalLen == 0 {
-				continue
-			}
-			data := buf[header.Len:]
-			switch header.Protocol {
+			switch ip.Protocol {
 			case ProtocolICMP:
 				log.Println("暂不支持ICMP协议")
 			case ProtocolTCP:
-				tcpP := gopacket.NewPacket(data, layers.LayerTypeTCP, gopacket.Default)
+				tcpP := gopacket.NewPacket(ip.Payload, layers.LayerTypeTCP, gopacket.Default)
 				tl := tcpP.TransportLayer()
 				tcp, _ := tl.(*layers.TCP)
+				log.Println("源端口:", tcp.SrcPort, "目的端口:", tcp.DstPort)
 				if tcp.SYN && tcp.Seq != 0 {
 					log.Println("第一次握手", tcp.Seq)
 					log.Println("第二次握手")
 
-					ip := &layers.IPv4{
+					ip2 := &layers.IPv4{
 						Version:  4,
 						TTL:      255,
 						Flags:    layers.IPv4DontFragment,
 						Protocol: layers.IPProtocolTCP,
-						SrcIP:    header.Dst,
-						DstIP:    header.Src,
+						SrcIP:    ip.DstIP,
+						DstIP:    ip.SrcIP,
 					}
 
 					tcp2 := &layers.TCP{
@@ -74,9 +72,11 @@ func main() {
 						Seq:     123,
 						Window:  65535,
 					}
-					options := gopacket.SerializeOptions{}
+					options := gopacket.SerializeOptions{
+						FixLengths: true,
+					}
 					buffer := gopacket.NewSerializeBuffer()
-					err := gopacket.SerializeLayers(buffer, options, ip, tcp2)
+					err := gopacket.SerializeLayers(buffer, options, ip2, tcp2)
 					if err != nil {
 						log.Println("Error serializing packet:", err)
 						continue
