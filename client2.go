@@ -20,7 +20,7 @@ const (
 )
 
 func main() {
-	tun2 := initTun2("Test Tun", "20.0.0.1/24")
+	tun2 := initTun2("Test Tun", "10.0.0.1/24")
 	for {
 		// 第一个字节获取到协议版本号和头部长度
 		buf := make([]byte, 2048)
@@ -50,7 +50,7 @@ func main() {
 				tl := tcpP.TransportLayer()
 				tcp, _ := tl.(*layers.TCP)
 				log.Println("源端口:", tcp.SrcPort, "目的端口:", tcp.DstPort)
-				if tcp.SYN && tcp.Seq != 0 {
+				if tcp.SYN {
 					log.Println("第一次握手", tcp.Seq)
 					log.Println("第二次握手")
 
@@ -70,7 +70,6 @@ func main() {
 						ACK:     true,
 						Ack:     tcp.Seq + 1,
 						Seq:     123,
-						Window:  65535,
 					}
 					options := gopacket.SerializeOptions{
 						FixLengths: true,
@@ -88,53 +87,9 @@ func main() {
 						continue
 					}
 					log.Println(n2)
-				} else if tcp.ACK && tcp.Ack != 0 && tcp.Seq != 0 {
+				} else if tcp.ACK {
 					log.Println("第三次握手", tcp.ACK, tcp.Seq)
-				} else {
-					log.Println("开始发送数据")
 				}
-				//if tcp.SYN && !tcp.ACK {
-				//	log.Println("完成连接")
-				//	sourcePort := tl.TransportFlow().Src()
-				//	dstPort := tl.TransportFlow().Dst()
-				//	log.Println("源端口:", sourcePort, "目的端口:", dstPort)
-				//	dialer := getSocks5TCPDialer2()
-				//	_, err := dialer.Dial("tcp", header.Dst.String()+":"+dstPort.String())
-				//	if err != nil {
-				//		log.Println(err)
-				//		continue
-				//	}
-				//	al := tcpP.ApplicationLayer()
-				//	if al != nil {
-				//		log.Println(al.Payload())
-				//		log.Println(al.LayerPayload())
-				//		log.Println(al.LayerContents())
-				//	}
-				//}
-
-				//// TODO 转发数据
-				//_, err = conn.Write(data)
-				//if err != nil {
-				//	log.Println(err)
-				//	continue
-				//}
-				////log.Println(string(data))
-				//result := make([]byte, 1024)
-				//n2, err := conn.Read(result)
-				//if err != nil {
-				//	log.Println(err)
-				//	continue
-				//}
-				//result = result[:n2]
-				//log.Println(string(result))
-				//n3, err := tun2.Write(result, 0)
-				//if err != nil {
-				//	log.Println(err)
-				//	continue
-				//}
-				//log.Println(n3)
-				//log.Println(string(result))
-
 			case ProtocolUDP:
 			default:
 			}
