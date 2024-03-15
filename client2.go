@@ -10,6 +10,8 @@ import (
 	"golang.zx2c4.com/wireguard/windows/tunnel/winipcfg"
 	"log"
 	"net/netip"
+	"regexp"
+	"sync"
 )
 
 const DefaultMTU2 = 1420
@@ -20,7 +22,7 @@ const (
 )
 
 func main() {
-	tun2 := initTun2("Test Tun", "10.0.0.1/24")
+	tun2 := initTun2("Test Tun", "20.0.0.1/24")
 	for {
 		// 第一个字节获取到协议版本号和头部长度
 		buf := make([]byte, 2048)
@@ -28,6 +30,9 @@ func main() {
 		buf = buf[:n]
 		if err != nil {
 			panic(err)
+		}
+		if n >= 2047 {
+			log.Println("超级长")
 		}
 		switch buf[0] >> 4 {
 		case ipv4.Version:
@@ -70,9 +75,16 @@ func main() {
 						ACK:     true,
 						Ack:     tcp.Seq + 1,
 						Seq:     123,
+						Window:  65535,
 					}
 					options := gopacket.SerializeOptions{
-						FixLengths: true,
+						FixLengths:       true,
+						ComputeChecksums: true,
+					}
+					err = tcp2.SetNetworkLayerForChecksum(ip)
+					if err != nil {
+						log.Println(err)
+						continue
 					}
 					buffer := gopacket.NewSerializeBuffer()
 					err := gopacket.SerializeLayers(buffer, options, ip2, tcp2)
@@ -86,9 +98,88 @@ func main() {
 						log.Println(err)
 						continue
 					}
+
 					log.Println(n2)
-				} else if tcp.ACK {
+				} else if tcp.ACK && !tcp.PSH {
 					log.Println("第三次握手", tcp.ACK, tcp.Seq)
+				} else if tcp.ACK && tcp.PSH {
+					log.Println("开始推送数据")
+					dialer := getSocks5TCPDialer2()
+					re := regexp.MustCompile(`(\d+)`) // 匹配数字
+					match := re.FindStringSubmatch(tcp.DstPort.String())
+					addr := ip.DstIP.String() + ":" + match[1]
+					conn, err := dialer.Dial("tcp", addr)
+					if err != nil {
+						log.Println(err)
+						return
+					}
+					log.Println("代理连接成功")
+
+					resp := make([]byte, 2048)
+					wg := sync.WaitGroup{}
+					wg.Add(2)
+					log.Println("传输数据ing")
+					go func() {
+						defer wg.Done()
+						n1, err := conn.Write(tcp.Payload)
+						if err != nil {
+							log.Println(err)
+						}
+						log.Println("发送了", n1)
+					}()
+					go func() {
+						defer wg.Done()
+						n2, err := conn.Read(resp)
+						if err != nil {
+							log.Println(err)
+						}
+						log.Println("接收到", n2)
+						resp = resp[:n2]
+					}()
+					wg.Wait()
+					log.Println("传输完成")
+					// 封装成ip包写回去
+					ip2 := &layers.IPv4{
+						Version:  4,
+						TTL:      255,
+						Flags:    layers.IPv4DontFragment,
+						Protocol: layers.IPProtocolTCP,
+						SrcIP:    ip.DstIP,
+						DstIP:    ip.SrcIP,
+					}
+
+					tcp2 := &layers.TCP{
+						SrcPort: tcp.DstPort,
+						DstPort: tcp.SrcPort,
+						PSH:     true,
+						ACK:     true,
+						Ack:     tcp.Seq + uint32(len(resp)),
+						Seq:     tcp.Ack,
+						Window:  65535,
+					}
+					options := gopacket.SerializeOptions{
+						FixLengths:       true,
+						ComputeChecksums: true,
+					}
+					err = tcp2.SetNetworkLayerForChecksum(ip)
+					if err != nil {
+						log.Println(err)
+						continue
+					}
+					buffer := gopacket.NewSerializeBuffer()
+					err = gopacket.SerializeLayers(buffer, options, ip2, tcp2, gopacket.Payload(resp))
+					if err != nil {
+						log.Println(err)
+						continue
+					}
+					n2, err := tun2.Write(buffer.Bytes(), 0)
+					log.Println(buffer.Bytes())
+					if err != nil {
+						log.Println(err)
+						continue
+					}
+
+					log.Println(n2)
 				}
 			case ProtocolUDP:
 			default:
