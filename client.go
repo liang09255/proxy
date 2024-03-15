@@ -34,9 +34,6 @@ func main() {
 		if err != nil {
 			panic(err)
 		}
-		if n >= 2047 {
-			log.Println("超级长")
-		}
 		switch buf[0] >> 4 {
 		case ipv4.Version:
 			ipP := gopacket.NewPacket(buf, layers.LayerTypeIPv4, gopacket.Default)
@@ -52,7 +49,6 @@ func main() {
 
 			switch ip.Protocol {
 			case ProtocolICMP:
-				log.Println("暂不支持ICMP协议")
 			case ProtocolTCP:
 				tcpP := gopacket.NewPacket(ip.Payload, layers.LayerTypeTCP, gopacket.Default)
 				tl := tcpP.TransportLayer()
@@ -167,11 +163,10 @@ func proxyPacket(ip *layers.IPv4, tcp *layers.TCP) (err error) {
 	log.Println("传输数据ing")
 	go func() {
 		defer wg.Done()
-		n1, err := conn.Write(tcp.Payload)
+		_, err := conn.Write(tcp.Payload)
 		if err != nil {
 			log.Println(err)
 		}
-		log.Println("发送了", n1)
 	}()
 	go func() {
 		defer wg.Done()
@@ -179,7 +174,6 @@ func proxyPacket(ip *layers.IPv4, tcp *layers.TCP) (err error) {
 		if err != nil {
 			log.Println(err)
 		}
-		log.Println("接收到", n2)
 		resp = resp[:n2]
 	}()
 	wg.Wait()
@@ -217,6 +211,5 @@ func proxyPacket(ip *layers.IPv4, tcp *layers.TCP) (err error) {
 		return err
 	}
 	_, err = tun2.Write(buffer.Bytes(), 0)
-	log.Println(buffer.Bytes())
 	return err
 }
